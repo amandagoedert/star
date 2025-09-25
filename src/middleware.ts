@@ -314,12 +314,14 @@ export function middleware(req: NextRequest) {
   const country = getCountryFromHeaders(req)
   const { device, isBot, ua } = userAgent(req)
   const uaLower = ua.toLowerCase()
+  const restrictToMobile =
+    process.env.RESTRICT_TO_MOBILE?.toLowerCase() === 'true'
 
   if (isAllowedUA(ua)) {
     return NextResponse.next()
   }
 
-  if (device.type !== 'mobile') {
+  if (restrictToMobile && device.type && device.type !== 'mobile') {
     // console.log(
     //   `🛑 [BLOCKED_DEVICE] Device not allowed! IP: ${clientIP}, Type: ${device.type}, Model: ${device.model}, Vendor: ${device.vendor}`
     // );
