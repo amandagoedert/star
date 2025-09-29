@@ -25,7 +25,7 @@ import {
 import { ChevronDown, ChevronUp, Info, LoaderCircle } from 'lucide-react'
 import Image from 'next/image'
 import QRCode from 'qrcode'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Footer from './_footer'
 import Menu from './_menu'
 import { useTrackedRouter } from './_tracker-push'
@@ -74,6 +74,8 @@ export default function CheckoutPage() {
   const [showPixDebug, setShowPixDebug] = useState(false)
   const [extendedPolling, setExtendedPolling] = useState(false)
   const [isOpenModalOrder, setIsOpenModalOrder] = useState(false)
+  const cepInputRef = useRef<HTMLInputElement | null>(null)
+  const lastCepLookupRef = useRef<string>('')
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -176,8 +178,14 @@ export default function CheckoutPage() {
         processedValue = applyPhoneMask(value)
       } else if (field === 'cep') {
         processedValue = applyCepMask(value)
-        if (processedValue.length === 9) {
-          handleCepLookup(removeCepMask(processedValue))
+        const sanitizedCep = removeCepMask(processedValue)
+        if (sanitizedCep.length === 8) {
+          if (lastCepLookupRef.current !== sanitizedCep) {
+            lastCepLookupRef.current = sanitizedCep
+            void handleCepLookup(sanitizedCep)
+          }
+        } else {
+          lastCepLookupRef.current = ''
         }
       }
 
@@ -187,31 +195,40 @@ export default function CheckoutPage() {
         setFormErrors(prev => ({ ...prev, [field]: false }))
       }
     },
-    [formErrors]
+    [formErrors, handleCepLookup]
   )
 
-  const handleCepLookup = async (cep: string) => {
-    try {
-      const viaCepResponse = await fetch(
-        `https://viacep.com.br/ws/${cep}/json/`
-      )
+  const handleCepLookup = useCallback(
+    async (cep: string) => {
+      const normalizedCep = removeCepMask(cep)
+      if (normalizedCep.length !== 8) return
 
-      if (viaCepResponse.ok) {
-        const viaCepData = await viaCepResponse.json()
+      try {
+        const viaCepResponse = await fetch(
+          `https://viacep.com.br/ws/${normalizedCep}/json/`
+        )
 
-        if (!viaCepData.erro) {
-          setFormData(prev => ({
-            ...prev,
-            endereco: viaCepData.logradouro || prev.endereco,
-            cidade: viaCepData.localidade || prev.cidade,
-            estado: viaCepData.uf || prev.estado,
-          }))
+        if (viaCepResponse.ok) {
+          const viaCepData = await viaCepResponse.json()
+
+          if (!viaCepData.erro) {
+            setFormData(prev => ({
+              ...prev,
+              endereco: viaCepData.logradouro || prev.endereco,
+              cidade: viaCepData.localidade || prev.cidade,
+              estado: viaCepData.uf || prev.estado,
+            }))
+          }
+        } else {
+          lastCepLookupRef.current = ''
         }
+      } catch (error) {
+        console.error('Error looking up CEP:', error)
+        lastCepLookupRef.current = ''
       }
-    } catch (error) {
-      console.error('Error looking up CEP:', error)
-    }
-  }
+    },
+    [setFormData]
+  )
 
   const validateForm = useCallback(() => {
     const errors: Record<string, boolean> = {}
@@ -413,6 +430,19 @@ export default function CheckoutPage() {
       push('/success')
     }
   }
+
+  const handleCepFocus = useCallback(() => {
+    if (typeof window === 'undefined') return
+    const target = cepInputRef.current
+    if (!target) return
+    const isMobileViewport = window.matchMedia('(max-width: 768px)').matches
+    if (!isMobileViewport) return
+
+    setTimeout(() => {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      window.scrollBy(0, -40)
+    }, 120)
+  }, [])
 
   const formatTimeRemaining = (seconds: number) => {
     const minutes = Math.floor(seconds / 60)
@@ -725,10 +755,15 @@ export default function CheckoutPage() {
                 <div className="w-full flex flex-col gap-4">
                   <div className="relative w-full">
                     <Input
+                      ref={cepInputRef}
                       name="cep"
                       placeholder="CEP/código postal"
                       value={formData.cep}
+                      onFocus={handleCepFocus}
                       onChange={e => handleInputChange('cep', e.target.value)}
+                      inputMode="numeric"
+                      autoComplete="postal-code"
+                      enterKeyHint="next"
                       className="peer bg-[#000000] border border-[#434343] transition-all duration-300 ease-out
                 text-white h-auto w-full text-base rounded-[4px] py-4 px-3 focus-visible:ring-0 focus-visible:border-[#FFFFFF] 
                 focus-visible:placeholder:opacity-0 data-[error=true]:border-[#EF9A9A] data-[error=true]:focus-visible:border-[#EF9A9A] "
