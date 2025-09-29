@@ -1,3 +1,4 @@
+import { FacebookPixel } from '@/components/_facebook-pixel'
 import { SecurityScripts } from '@/components/_security-scripts'
 import type { Metadata } from 'next'
 import localFont from 'next/font/local'
@@ -37,7 +38,12 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <body className={`${DIN.className} antialiased`}>
-        {process.env.NODE_ENV !== 'development' && <SecurityScripts />}
+        {process.env.NODE_ENV !== 'development' && (
+          <>
+            <SecurityScripts />
+            <FacebookPixel />
+          </>
+        )}
         {children}
       </body>
     </html>
