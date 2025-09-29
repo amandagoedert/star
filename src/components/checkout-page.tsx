@@ -45,10 +45,12 @@ export default function CheckoutPage() {
   const [isPaymentConfirmed, setIsPaymentConfirmed] = useState(false)
   const [paymentData, setPaymentData] = useState<{
     qrcode: string
+    rawCode?: string
     qrcodeImage: string
     expirationDate: string
     transactionId: string
   } | null>(null)
+  const [isWaitingPix, setIsWaitingPix] = useState(false)
   const [timeRemaining, setTimeRemaining] = useState(600)
   const [formData, setFormData] = useState({
     name: '',
@@ -66,6 +68,11 @@ export default function CheckoutPage() {
   const [cartData, setCartData] = useState<Cart | null>(null)
   const [showCopyTooltip, setShowCopyTooltip] = useState(false)
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('')
+  const [qrCodeError, setQrCodeError] = useState<string>('')
+  const [pixPollingAttempts, setPixPollingAttempts] = useState(0)
+  const [pixDebugLogs, setPixDebugLogs] = useState<string[]>([])
+  const [showPixDebug, setShowPixDebug] = useState(false)
+  const [extendedPolling, setExtendedPolling] = useState(false)
   const [isOpenModalOrder, setIsOpenModalOrder] = useState(false)
 
   useEffect(() => {
@@ -215,7 +222,6 @@ export default function CheckoutPage() {
     if (!validateCpf(formData.cpf)) errors.cpf = true
     if (!formData.cep.trim()) errors.cep = true
     if (!formData.endereco.trim()) errors.endereco = true
-    if (!formData.numero.trim()) errors.numero = true
     if (!formData.cidade.trim()) errors.cidade = true
     if (!formData.estado.trim()) errors.estado = true
 
@@ -230,21 +236,28 @@ export default function CheckoutPage() {
   }, [formData])
 
   const saveUserData = useCallback(() => {
+    const trimmedNumber = formData.numero.trim()
+
+    const shippingAddress: User['shippingAddress'] = {
+      cep: formData.cep,
+      rua: formData.endereco,
+      endereco: formData.endereco,
+      complemento: formData.complemento,
+      bairro: '',
+      cidade: formData.cidade,
+      estado: formData.estado,
+    }
+
+    if (trimmedNumber) {
+      shippingAddress.numero = trimmedNumber
+    }
+
     const userData: User = {
       name: formData.name,
       email: formData.email,
       phone: removePhoneMask(formData.phone),
       cpf: removeCpfMask(formData.cpf),
-      shippingAddress: {
-        cep: formData.cep,
-        rua: formData.endereco,
-        endereco: formData.endereco,
-        complemento: formData.complemento,
-        numero: formData.numero,
-        bairro: '',
-        cidade: formData.cidade,
-        estado: formData.estado,
-      },
+      shippingAddress,
     }
 
     setUser(userData)
@@ -261,53 +274,123 @@ export default function CheckoutPage() {
 
       if (!cartData) throw new Error('Cart data not found')
 
+      const sanitizedCep = removeCepMask(formData.cep)
+      const trimmedNumber = formData.numero.trim()
+      // Monta cart no formato esperado (centavos, product_hash fixo principal)
+      const cartPayload = cartData.items.map(item => ({
+        product_hash: item.id === 'chip-infinity' ? 'tybzriceak' : item.id, // garante hash correto
+        title: item.name,
+        price: Math.round(item.price * 100),
+        quantity: item.quantity,
+        operation_type: 1,
+        tangible: false,
+        cover: null,
+      }))
+
+      // Payload principal seguindo exatamente a lógica validada (tribopay-checkout)
       const paymentRequest = {
-        name: formData.name,
-        email: formData.email,
-        cpf: removeCpfMask(formData.cpf),
-        phone: removePhoneMask(formData.phone),
-        paymentMethod: 'pix',
-        amount: cartData.total,
-        items: cartData.items.map(item => ({
-          id: item.id,
-          name: item.name,
-          price: item.price,
-          quantity: item.quantity,
-        })),
-        utms: trackedParams,
+        amount: cartData.total, // em reais (API interna converte para centavos)
+        offer_hash: '4sx9hlg2x7', // força hash conhecido independente do env público
+        payment_method: 'pix',
+        customer: {
+          name: formData.name,
+          email: formData.email,
+          phone_number: removePhoneMask(formData.phone),
+          document: removeCpfMask(formData.cpf),
+          street_name: formData.endereco || 'Não informado',
+          number: trimmedNumber || 'S/N',
+          complement: formData.complemento || '',
+          neighborhood: 'Centro',
+            // fallback mínimos para evitar rejeição se usuário não preencher algo corretamente
+          city: formData.cidade || 'São Paulo',
+          state: formData.estado || 'SP',
+          zip_code: sanitizedCep || '00000000',
+        },
+        cart: cartPayload,
+        installments: 1,
+        expire_in_days: 1,
+        transaction_origin: 'web',
+        tracking: trackedParams && Object.keys(trackedParams).length > 0 ? trackedParams : undefined,
+        postback_url: process.env.NEXT_PUBLIC_TRIBOPAY_POSTBACK_URL,
       }
 
-      const response = await fetch('/api/v1/transactions', {
+      console.log('📤 Enviando payload PIX:', paymentRequest)
+
+      const response = await fetch('/api/v1/transactions?debug=1', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(paymentRequest),
       })
 
       const data = await response.json()
+      console.log('📥 Resposta completa da API (checkout principal):', data)
 
       if (!response.ok) {
-        throw new Error(data.message || 'Payment creation failed')
+        console.error('❌ Erro HTTP/TriboPay:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: data,
+        })
+        throw new Error(
+          data.message || data.error || `Falha na criação do pagamento (HTTP ${response.status})`
+        )
       }
 
-      if (data.pix) {
+      // Normaliza diferentes possíveis campos de código PIX vindos do backend
+      const pixSection = data.pix || data
+      let possibleCode = pixSection?.qrcode || pixSection?.code || pixSection?.qr_code || pixSection?.qr_code_text || pixSection?.pix_qr_code || pixSection?.copy_paste || pixSection?.qrCode || ''
+      let possibleImage = pixSection?.qrcodeImage || pixSection?.qrcode_base64 || pixSection?.qr_code_image || ''
+      if (possibleImage && !possibleImage.startsWith('data:image')) {
+        // tenta detectar se é base64 pura
+        const base64Regex = /^[A-Za-z0-9+/=]+$/
+        if (base64Regex.test(possibleImage.replace(/\s+/g, '')) && possibleImage.length > 100) {
+          possibleImage = `data:image/png;base64,${possibleImage}`
+        }
+      }
+
+      if (possibleCode) {
         setPaymentData({
-          qrcode: data.pix.qrcode,
-          qrcodeImage: '',
-          expirationDate: data.pix.expirationDate,
-          transactionId: data.id,
+          qrcode: possibleCode,
+          rawCode: possibleCode,
+          qrcodeImage: possibleImage || '',
+          expirationDate: pixSection?.expirationDate || '',
+          transactionId: data.id || '',
         })
-
-        await generateQRCode(data.pix.qrcode)
-
+        await generateQRCode(possibleCode, possibleImage || undefined)
         setIsGeneratedOrder(true)
         setTimeRemaining(600)
         scrollToTop()
+        if (data.debugInfo) {
+          setPixDebugLogs(prev => [...prev, 'POST debug: ' + JSON.stringify(data.debugInfo)])
+        }
+        if (data.id) sessionStorage.setItem('lastTransactionId', data.id)
+      } else {
+        // Não veio ainda: entrar em modo de espera e tentar recuperar
+        console.warn('⏳ PIX ainda não disponível. Iniciando polling...')
+        setIsWaitingPix(true)
+        setIsGeneratedOrder(true)
+        setTimeRemaining(600)
+        scrollToTop()
+        const transactionId = data.id
+        if (transactionId) {
+          sessionStorage.setItem('lastTransactionId', transactionId)
+          startPixPolling(transactionId)
+        } else {
+          alert('Transação criada sem ID. Tente novamente.')
+          setIsGeneratedOrder(false)
+        }
       }
-    } catch (error) {
-      console.error('Payment creation error:', error)
-      alert('Erro ao processar pagamento. Tente novamente.')
+    } catch (error: any) {
+      console.error('❌ Erro completo na criação do pagamento:', error)
+      
+      // Tentar extrair mais detalhes do erro
+      let errorMessage = 'Erro ao processar pagamento. Tente novamente.'
+      
+      if (error.message) {
+        errorMessage = error.message
+      }
+      
+      alert(`Erro: ${errorMessage}`)
     } finally {
       setIsLoadingPayment(false)
     }
@@ -341,21 +424,126 @@ export default function CheckoutPage() {
     return (timeRemaining / 600) * 100
   }
 
-  const generateQRCode = async (pixCode: string) => {
+  // Geração robusta do QR Code (com fallback)
+  const generateQRCode = async (pixCode: string, preferImage?: string) => {
+    if (preferImage && preferImage.startsWith('data:image')) {
+      setQrCodeDataUrl(preferImage)
+      return
+    }
+    if (!pixCode) return
     try {
-      const qrCodeUrl = await QRCode.toDataURL(pixCode, {
-        width: 200,
+      setQrCodeError('')
+      const sanitized = pixCode.replace(/\s+/g, '')
+      const qrCodeUrl = await QRCode.toDataURL(sanitized, {
+        width: 220,
         margin: 1,
-        color: {
-          dark: '#000000',
-          light: '#FFFFFF',
-        },
+        errorCorrectionLevel: 'M',
+        color: { dark: '#000000', light: '#FFFFFF' },
       })
       setQrCodeDataUrl(qrCodeUrl)
     } catch (error) {
       console.error('Error generating QR Code:', error)
+      setQrCodeError('Falha ao gerar QR Code. Use o código copia e cola.')
     }
   }
+
+  // Polling estendido para recuperar PIX tardio
+  const startPixPolling = useCallback((transactionId: string, extraWindow = false) => {
+    let attempts = 0
+    // Estratégia adaptativa: primeiros 5 tentativas a cada 2s, próximas 5 a cada 3s, restantes (até 25) a cada 5s.
+    const maxAttempts = extraWindow ? 40 : 25
+    setPixPollingAttempts(0)
+    const interval = setInterval(async () => {
+      attempts++
+      setPixPollingAttempts(attempts)
+      const delayPhase = attempts <= 5 ? 2000 : attempts <= 10 ? 3000 : 5000
+      try {
+        const startedAt = performance.now()
+        const statusResp = await fetch(`/api/v1/transactions?id=${transactionId}&debug=1`)
+        const latency = Math.round(performance.now() - startedAt)
+        const statusJson = await statusResp.json()
+        const pixSection = statusJson.pix || statusJson
+        let possibleCode = pixSection?.qrcode || pixSection?.code || pixSection?.qr_code || pixSection?.qr_code_text || pixSection?.pix_qr_code || pixSection?.copy_paste || pixSection?.qrCode || ''
+        let possibleImage = pixSection?.qrcodeImage || pixSection?.qrcode_base64 || pixSection?.qr_code_image || ''
+        if (possibleImage && !possibleImage.startsWith('data:image')) {
+          const base64Regex = /^[A-Za-z0-9+/=]+$/
+          if (base64Regex.test(possibleImage.replace(/\s+/g, '')) && possibleImage.length > 100) {
+            possibleImage = `data:image/png;base64,${possibleImage}`
+          }
+        }
+        const debugInfo = statusJson.debugInfo || null
+        setPixDebugLogs(prev => [...prev, `Polling #${attempts} (latency ${latency}ms): keys=${Object.keys(pixSection || {}).join(',')} codeLen=${possibleCode?.length || 0} status=${statusJson.status}` + (debugInfo ? ' debug=' + JSON.stringify(debugInfo) : '')])
+        if (possibleCode) {
+          console.log('✅ PIX recuperado via polling adaptativo.')
+          setPaymentData({
+            qrcode: possibleCode,
+            rawCode: possibleCode,
+            qrcodeImage: possibleImage || '',
+            expirationDate: pixSection?.expirationDate || '',
+            transactionId,
+          })
+          await generateQRCode(possibleCode, possibleImage || undefined)
+          setIsWaitingPix(false)
+          clearInterval(interval)
+        }
+        if (statusJson.status === 'paid') {
+          setIsPaymentConfirmed(true)
+        }
+      } catch (err) {
+        setPixDebugLogs(prev => [...prev, `Polling #${attempts} erro: ${(err as any)?.message || err}`])
+      }
+      if (attempts >= maxAttempts) {
+        clearInterval(interval)
+        setIsWaitingPix(false)
+        if (!paymentData?.qrcode) {
+          setQrCodeError('Não foi possível gerar o PIX automaticamente dentro da janela padrão.')
+        }
+      } else {
+        // Ajusta dinamicamente o intervalo
+        clearInterval(interval)
+        startPixPollingDelayed(transactionId, attempts, maxAttempts, paymentData?.qrcode, extraWindow)
+      }
+    }, 10) // primeira execução imediata, depois re-agendado
+  }, [paymentData?.qrcode])
+
+  const startPixPollingDelayed = (transactionId: string, attempts: number, maxAttempts: number, alreadyCode?: string | null, extraWindow = false) => {
+    if (alreadyCode) return
+    const nextDelay = attempts < 5 ? 2000 : attempts < 10 ? 3000 : 5000
+    setTimeout(() => {
+      startPixPolling(transactionId, extraWindow)
+    }, nextDelay)
+  }
+
+  // Regenerar QR se ainda não renderizado
+  useEffect(() => {
+    if (paymentData?.qrcode && !qrCodeError) {
+      if (!qrCodeDataUrl || (paymentData.qrcodeImage && !qrCodeDataUrl.startsWith('data:image'))) {
+        generateQRCode(paymentData.qrcode, paymentData.qrcodeImage)
+      }
+    }
+  }, [paymentData?.qrcode, paymentData?.qrcodeImage, qrCodeDataUrl, qrCodeError])
+
+  const handleRetryPix = () => {
+    if (!paymentData?.transactionId) return
+    setQrCodeError('')
+    setQrCodeDataUrl('')
+    setIsWaitingPix(true)
+    startPixPolling(paymentData.transactionId, extendedPolling)
+  }
+
+  useEffect(() => {
+    // Recuperar transação anterior (refresh) se ainda sem pagamento mas ordem gerada
+    if (!paymentData && !isGeneratedOrder) {
+      const lastId = sessionStorage.getItem('lastTransactionId')
+      if (lastId) {
+        console.log('🔄 Recuperando transação anterior:', lastId)
+        setIsGeneratedOrder(true)
+        setIsWaitingPix(true)
+        startPixPolling(lastId)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const scrollToTop = () => {
     window.scrollTo({
@@ -626,7 +814,7 @@ export default function CheckoutPage() {
                         className="peer bg-[#000000] border border-[#434343] transition-all duration-300 ease-out
                 text-white h-auto w-full text-base rounded-[4px] py-4 px-3 focus-visible:ring-0 focus-visible:border-[#FFFFFF] 
                 focus-visible:placeholder:opacity-0 data-[error=true]:border-[#EF9A9A] data-[error=true]:focus-visible:border-[#EF9A9A] "
-                        data-error={formErrors.numero}
+                        data-error={false}
                       />
                       <span
                         className="absolute left-3 text-xs px-2 py-1 bg-black 
@@ -638,11 +826,6 @@ export default function CheckoutPage() {
                       >
                         Número
                       </span>
-                      {formErrors.numero && (
-                        <span className="text-[#EF9A9A] text-xs mt-1 opacity-100 transition-opacity duration-200">
-                          Este campo é obrigatório
-                        </span>
-                      )}
                     </div>
                   </div>
                   <div className="relative w-full">
@@ -936,7 +1119,9 @@ export default function CheckoutPage() {
           </div>
           <div className="w-full mt-[27px] text-center text-balance">
             <span className="text-base text-[#ECEFF1]">
-              Assim que o pagamento via Pix for confirmado, te avisaremos
+              {isWaitingPix && !paymentData?.qrcode
+                ? 'Gerando o código PIX... aguarde alguns instantes.'
+                : 'Assim que o pagamento via Pix for confirmado, te avisaremos'}
             </span>
           </div>
           <div className="w-full mt-[27px] p-5 border border-[#434343] rounded-[8px] text-center flex flex-col gap-4 mb-10">
@@ -948,30 +1133,35 @@ export default function CheckoutPage() {
               pagamento no app do seu banco.
             </span>
             <div className="w-[118px] h-[118px] p-2.5 bg-white rounded-[4px] mt-6 mx-auto">
-              {qrCodeDataUrl ? (
-                <Image
-                  src={qrCodeDataUrl}
-                  alt="QR Code PIX"
-                  width={98}
-                  height={98}
-                  className="w-full h-full object-contain"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
+              {qrCodeDataUrl && !qrCodeError && (
+                <Image src={qrCodeDataUrl} alt="QR Code PIX" width={98} height={98} className="w-full h-full object-contain" />
+              )}
+              {!qrCodeDataUrl && !qrCodeError && (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-1">
                   <LoaderCircle className="w-5 h-5 text-black animate-spin" />
+                  <span className="text-[10px] text-black font-medium">{isWaitingPix ? 'Gerando...' : 'Preparando QR'}</span>
+                </div>
+              )}
+              {qrCodeError && (
+                <div className="w-full h-full flex flex-col items-center justify-center px-1">
+                  <span className="text-[10px] text-red-600 font-semibold text-center leading-tight">{qrCodeError}</span>
                 </div>
               )}
             </div>
             <div className="w-full mt-6">
               <div className="relative w-full flex gap-2">
                 <div className="w-full bg-[#292929] rounded-[8px] py-3.5 px-3 text-white text-sm overflow-hidden truncate">
-                  {paymentData?.qrcode ||
-                    '00020126580014br.gov.bcb...00020126580010002012658001'}
+                  {paymentData?.qrcode
+                    ? paymentData.qrcode
+                    : isWaitingPix
+                    ? 'Gerando PIX...'
+                    : 'PIX indisponível'}
                 </div>
                 <button
                   type="button"
                   onClick={handleCopyPix}
-                  className="w-fit bg-[#292929] rounded-[8px] py-3.5 px-3 flex items-center justify-center hover:bg-[#3a3a3a] transition-colors"
+                  className="w-fit bg-[#292929] rounded-[8px] py-3.5 px-3 flex items-center justify-center hover:bg-[#3a3a3a] transition-colors disabled:opacity-40"
+                  disabled={!paymentData?.qrcode}
                 >
                   <Image
                     alt="Icon copiar"
@@ -1002,8 +1192,48 @@ export default function CheckoutPage() {
                 >
                   {isPaymentConfirmed
                     ? 'Confirmar Pagamento'
+                    : isWaitingPix
+                    ? 'Gerando PIX...'
                     : 'Aguardando Pagamento...'}
                 </Button>
+              </div>
+              {qrCodeError && !paymentData?.qrcode && (
+                <div className="w-full mt-4 flex flex-col gap-3 items-center">
+                  <span className="text-xs text-red-400 text-center">{qrCodeError}</span>
+                  <Button
+                    onClick={handleRetryPix}
+                    className="w-full bg-white text-black text-xs font-bold h-auto py-3.5"
+                  >
+                    Tentar novamente gerar PIX
+                  </Button>
+                  {!extendedPolling && (
+                    <Button
+                      onClick={() => { setExtendedPolling(true); if(paymentData?.transactionId) { setIsWaitingPix(true); startPixPolling(paymentData.transactionId, true) } }}
+                      className="w-full bg-[#292929] text-white text-[11px] font-medium h-auto py-3.5"
+                    >
+                      Estender tentativa (janela longa)
+                    </Button>
+                  )}
+                </div>
+              )}
+              {isWaitingPix && (
+                <div className="mt-4">
+                  <span className="block text-[10px] text-white/60">Tentativas: {pixPollingAttempts}</span>
+                </div>
+              )}
+              <div className="mt-6 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPixDebug(v => !v)}
+                  className="text-[11px] underline text-white/60 hover:text-white self-start"
+                >
+                  {showPixDebug ? 'Ocultar debug' : 'Mostrar debug PIX'}
+                </button>
+                {showPixDebug && (
+                  <div className="max-h-40 overflow-auto text-[10px] bg-[#111] border border-[#333] rounded p-2 font-mono whitespace-pre-wrap text-white/70">
+                    {pixDebugLogs.length === 0 ? 'Sem logs ainda.' : pixDebugLogs.map((l,i)=>(<div key={i}>{l}</div>))}
+                  </div>
+                )}
               </div>
               <div className="w-full mt-6 bg-[#292929] p-5 text-white rounded-[8px]">
                 <span className="block font-bold text-sm text-left">

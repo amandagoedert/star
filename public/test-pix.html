@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste PIX - TriboPay</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #00bc77;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #009960;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .qr-code {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .pix-code {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            font-family: monospace;
+            word-break: break-all;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Teste de Integração PIX - TriboPay</h1>
+        <p>Preencha os dados abaixo para testar a geração do PIX:</p>
+        
+        <form id="pixForm">
+            <div class="form-group">
+                <label for="name">Nome Completo:</label>
+                <input type="text" id="name" value="João Silva Santos" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="email">E-mail:</label>
+                <input type="email" id="email" value="teste@email.com" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="cpf">CPF (somente números):</label>
+                <input type="text" id="cpf" value="12345678901" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="phone">Telefone (somente números):</label>
+                <input type="text" id="phone" value="11999999999" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="cep">CEP:</label>
+                <input type="text" id="cep" value="01234567" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="endereco">Endereço:</label>
+                <input type="text" id="endereco" value="Rua das Flores, 123" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="cidade">Cidade:</label>
+                <input type="text" id="cidade" value="São Paulo" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="estado">Estado (UF):</label>
+                <input type="text" id="estado" value="SP" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="amount">Valor (R$):</label>
+                <input type="number" id="amount" value="197.90" step="0.01" required>
+            </div>
+            
+            <button type="submit" id="submitBtn">🔥 Gerar PIX</button>
+        </form>
+        
+        <div id="result" class="result" style="display: none;"></div>
+    </div>
+
+    <script>
+        document.getElementById('pixForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const resultDiv = document.getElementById('result');
+            
+            // Desabilitar botão
+            submitBtn.disabled = true;
+            submitBtn.textContent = '⏳ Processando...';
+            
+            // Coletar dados do formulário
+            const formData = {
+                amount: parseFloat(document.getElementById('amount').value),
+                offer_hash: '4sx9hlg2x7',
+                payment_method: 'pix',
+                customer: {
+                    name: document.getElementById('name').value,
+                    email: document.getElementById('email').value,
+                    phone_number: document.getElementById('phone').value,
+                    document: document.getElementById('cpf').value,
+                    street_name: document.getElementById('endereco').value,
+                    number: '123',
+                    complement: '',
+                    neighborhood: 'Centro',
+                    city: document.getElementById('cidade').value,
+                    state: document.getElementById('estado').value,
+                    zip_code: document.getElementById('cep').value,
+                },
+                cart: [{
+                    product_hash: 'tybzriceak',
+                    title: 'Chip Infinity M3',
+                    price: Math.round(parseFloat(document.getElementById('amount').value) * 100),
+                    quantity: 1,
+                    operation_type: 1,
+                    tangible: false,
+                    cover: null
+                }],
+                installments: 1,
+                expire_in_days: 1,
+                transaction_origin: 'test'
+            };
+            
+            try {
+                console.log('📤 Enviando dados:', formData);
+                
+                const response = await fetch('/api/v1/transactions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData),
+                });
+                
+                const result = await response.json();
+                console.log('📥 Resposta recebida:', result);
+                
+                if (response.ok && result.pix) {
+                    // Sucesso - mostrar PIX
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <h3>✅ PIX Gerado com Sucesso!</h3>
+                        <p><strong>ID da Transação:</strong> ${result.id}</p>
+                        <p><strong>Status:</strong> ${result.status}</p>
+                        
+                        <div class="qr-code">
+                            <h4>📱 Código PIX:</h4>
+                            <div class="pix-code">${result.pix.qrcode}</div>
+                            <button onclick="copyToClipboard('${result.pix.qrcode}')">📋 Copiar Código</button>
+                        </div>
+                        
+                        ${result.pix.expirationDate ? `<p><strong>⏰ Expira em:</strong> ${result.pix.expirationDate}</p>` : ''}
+                    `;
+                } else {
+                    // Erro
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `
+                        <h3>❌ Erro ao Gerar PIX</h3>
+                        <p><strong>Erro:</strong> ${result.error || 'Erro desconhecido'}</p>
+                        <p><strong>Mensagem:</strong> ${result.message || 'Sem detalhes'}</p>
+                        ${result.details ? `<p><strong>Detalhes:</strong> ${JSON.stringify(result.details)}</p>` : ''}
+                    `;
+                }
+                
+            } catch (error) {
+                console.error('❌ Erro na requisição:', error);
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `
+                    <h3>❌ Erro de Conexão</h3>
+                    <p>${error.message}</p>
+                `;
+            } finally {
+                // Reabilitar botão
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🔥 Gerar PIX';
+                
+                // Mostrar resultado
+                resultDiv.style.display = 'block';
+                resultDiv.scrollIntoView({ behavior: 'smooth' });
+            }
+        });
+        
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('✅ Código PIX copiado para a área de transferência!');
+            }).catch(err => {
+                console.error('Erro ao copiar:', err);
+                // Fallback para navegadores antigos
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                alert('✅ Código PIX copiado!');
+            });
+        }
+    </script>
+</body>
+</html>
