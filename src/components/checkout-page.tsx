@@ -168,36 +168,6 @@ export default function CheckoutPage() {
     }
   }, [paymentData?.transactionId, isPaymentConfirmed])
 
-  const handleInputChange = useCallback(
-    (field: string, value: string) => {
-      let processedValue = value
-
-      if (field === 'cpf') {
-        processedValue = applyCpfMask(value)
-      } else if (field === 'phone') {
-        processedValue = applyPhoneMask(value)
-      } else if (field === 'cep') {
-        processedValue = applyCepMask(value)
-        const sanitizedCep = removeCepMask(processedValue)
-        if (sanitizedCep.length === 8) {
-          if (lastCepLookupRef.current !== sanitizedCep) {
-            lastCepLookupRef.current = sanitizedCep
-            void handleCepLookup(sanitizedCep)
-          }
-        } else {
-          lastCepLookupRef.current = ''
-        }
-      }
-
-      setFormData(prev => ({ ...prev, [field]: processedValue }))
-
-      if (formErrors[field]) {
-        setFormErrors(prev => ({ ...prev, [field]: false }))
-      }
-    },
-    [formErrors, handleCepLookup]
-  )
-
   const handleCepLookup = useCallback(
     async (cep: string) => {
       const normalizedCep = removeCepMask(cep)
@@ -228,6 +198,36 @@ export default function CheckoutPage() {
       }
     },
     [setFormData]
+  )
+
+  const handleInputChange = useCallback(
+    (field: string, value: string) => {
+      let processedValue = value
+
+      if (field === 'cpf') {
+        processedValue = applyCpfMask(value)
+      } else if (field === 'phone') {
+        processedValue = applyPhoneMask(value)
+      } else if (field === 'cep') {
+        processedValue = applyCepMask(value)
+        const sanitizedCep = removeCepMask(processedValue)
+        if (sanitizedCep.length === 8) {
+          if (lastCepLookupRef.current !== sanitizedCep) {
+            lastCepLookupRef.current = sanitizedCep
+            void handleCepLookup(sanitizedCep)
+          }
+        } else {
+          lastCepLookupRef.current = ''
+        }
+      }
+
+      setFormData(prev => ({ ...prev, [field]: processedValue }))
+
+      if (formErrors[field]) {
+        setFormErrors(prev => ({ ...prev, [field]: false }))
+      }
+    },
+    [formErrors, handleCepLookup]
   )
 
   const validateForm = useCallback(() => {
