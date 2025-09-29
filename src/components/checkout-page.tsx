@@ -427,6 +427,7 @@ export default function CheckoutPage() {
   // Geração robusta do QR Code (com fallback)
   const generateQRCode = async (pixCode: string, preferImage?: string) => {
     if (preferImage && preferImage.startsWith('data:image')) {
+      setQrCodeError('')
       setQrCodeDataUrl(preferImage)
       return
     }
