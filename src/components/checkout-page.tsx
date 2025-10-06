@@ -156,6 +156,8 @@ export default function CheckoutPage() {
           if (data.status === 'paid') {
             setIsPaymentConfirmed(true)
             clearInterval(statusCheck)
+            // Redireciona automaticamente para success após confirmação
+            setTimeout(() => push('/success'), 1500)
           }
         } catch (error) {
           console.error('Error checking payment status:', error)
@@ -519,6 +521,8 @@ export default function CheckoutPage() {
         }
         if (statusJson.status === 'paid') {
           setIsPaymentConfirmed(true)
+          // Redireciona automaticamente para success após confirmação
+          setTimeout(() => push('/success'), 1500)
         }
       } catch (err) {
         setPixDebugLogs(prev => [...prev, `Polling #${attempts} erro: ${(err as any)?.message || err}`])

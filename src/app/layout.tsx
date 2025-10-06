@@ -1,5 +1,6 @@
 import { FacebookPixel } from '@/components/_facebook-pixel'
 import { SecurityScripts } from '@/components/_security-scripts'
+import DesktopBlocker from '@/components/desktop-blocker'
 import type { Metadata } from 'next'
 import localFont from 'next/font/local'
 import './globals.css'
@@ -44,7 +45,9 @@ export default function RootLayout({
             <FacebookPixel />
           </>
         )}
-        {children}
+        <DesktopBlocker>
+          {children}
+        </DesktopBlocker>
       </body>
     </html>
   )
